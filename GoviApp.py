@@ -1,369 +1,272 @@
-import streamlit as st
-import pandas as pd
-import datetime
-import hashlib
-from supabase import create_client, Client
+import streamlit as st, pandas as pd, datetime, hashlib
+from supabase import create_client
 
-# ==========================================
-# SUPABASE CONFIGURATION & CONNECTION
-# ==========================================
-SUPABASE_URL = st.secrets["SUPABASE_URL"]
-SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-
+SUPABASE_URL, SUPABASE_KEY = st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"]
 @st.cache_resource
-def init_supabase():
-    return create_client(SUPABASE_URL, SUPABASE_KEY)
-
+def init_supabase(): return create_client(SUPABASE_URL, SUPABASE_KEY)
 supabase = init_supabase()
 
-# Page Configuration
-st.set_page_config(page_title="Aswanna | B2B AgTech Platform", page_icon="🌾", layout="wide")
+st.set_page_config(page_title="Aswanna", page_icon="🌾", layout="wide")
+hash_p = lambda p: hashlib.sha256(str.encode(p)).hexdigest()
 
-def hash_password(password):
-    return hashlib.sha256(str.encode(password)).hexdigest()
+def get_data(tbl, col=None, val=None):
+    q = supabase.table(tbl).select("*")
+    res = q.eq(col, val).execute() if col else q.execute()
+    return pd.DataFrame(res.data) if res.data else pd.DataFrame()
 
-# ==========================================
-# SUPABASE DATABASE HELPER FUNCTIONS
-# ==========================================
-def add_user(username, password, role, name, phone, address, bank):
-    data = {
-        "username": username,
-        "password": hash_password(password),
-        "role": role,
-        "name": name,
-        "phone": phone,
-        "address": address,
-        "bank": bank
-    }
-    response = supabase.table("users").insert(data).execute()
-    return response
-
-def check_user(username, password):
-    hashed_pwd = hash_password(password)
-    response = supabase.table("users").select("*").eq("username", username).eq("password", hashed_pwd).execute()
-    if response.data and len(response.data) > 0:
-        row = response.data[0]
-        return [row["username"], row["password"], row["role"], row["name"], row["phone"], row["address"], row["bank"]]
+def get_user_details(u):
+    for tbl in ["farmers", "buyers", "drivers", "admins"]:
+        try:
+            res = supabase.table(tbl).select("*").eq("username", u).execute()
+            if res.data: 
+                d = res.data[0]
+                role = d.get("role")
+                if tbl == "admins": role = "Admin"
+                elif tbl == "farmers" and not role: role = "විකුණුම්කරු (Seller)"
+                elif tbl == "buyers" and not role: role = "ගැණුම්කරු (Buyer)"
+                elif tbl == "drivers" and not role: role = "රියදුරු (Driver)"
+                return (d["username"], role, d["name"], d.get("phone"), d.get("address"), d.get("bank"), d.get("profile_image_url"))
+        except:
+            continue
     return None
 
-def get_user_details(username):
-    response = supabase.table("users").select("username, role, name, phone, address, bank").eq("username", username).execute()
-    if response.data and len(response.data) > 0:
-        row = response.data[0]
-        return (row["username"], row["role"], row["name"], row["phone"], row["address"], row["bank"])
-    return None
+def upload_img(f, path):
+    if not f: return ""
+    fp = f"{path}_{f.name}"
+    supabase.storage.from_("profile-pictures").upload(fp, f.getvalue(), file_options={"upsert": "true"})
+    return supabase.storage.from_("profile-pictures").get_public_url(fp)
 
-def add_crop(crop_id, farmer_username, crop_name, qty, price_per_kg, district, date):
-    data = {
-        "crop_id": crop_id,
-        "farmer_username": farmer_username,
-        "crop_name": crop_name,
-        "qty": qty,
-        "price_per_kg": price_per_kg,
-        "district": district,
-        "date": date
-    }
-    supabase.table("products").insert(data).execute()
-
-def get_all_crops():
-    response = supabase.table("products").select("*").execute()
-    if response.data:
-        return pd.DataFrame(response.data)
-    return pd.DataFrame(columns=["crop_id", "farmer_username", "crop_name", "qty", "price_per_kg", "district", "date"])
-
-def update_crop_qty(crop_id, new_qty):
-    supabase.table("products").update({"qty": new_qty}).eq("crop_id", crop_id).execute()
-
-def add_order(order_id, buyer_username, farmer_username, crop_name, qty, total_paid, your_commission, payout_to_farmer, status, date):
-    data = {
-        "order_id": order_id,
-        "buyer_username": buyer_username,
-        "farmer_username": farmer_username,
-        "crop_name": crop_name,
-        "qty": qty,
-        "total_paid": total_paid,
-        "your_commission": your_commission,
-        "payout_to_farmer": payout_to_farmer,
-        "status": status,
-        "date": date
-    }
-    supabase.table("orders").insert(data).execute()
-
-def get_all_orders():
-    response = supabase.table("orders").select("*").execute()
-    if response.data:
-        return pd.DataFrame(response.data)
-    return pd.DataFrame(columns=["order_id", "buyer_username", "farmer_username", "crop_name", "qty", "total_paid", "your_commission", "payout_to_farmer", "status", "date"])
-
-# Custom CSS (Extra Large Hero Banner Styling)
 st.markdown("""
-    <style>
-    .stApp { background-color: #0f172a; color: #f8fafc; }
-    .hero-container {
-        background: linear-gradient(rgba(15, 23, 42, 0.60), rgba(15, 23, 42, 0.88)), 
-                    url('https://images.unsplash.com/photo-1500937386664-56d1dfef3854?auto=format&fit=crop&w=1600&q=80');
-        background-size: cover; 
-        background-position: center; 
-        padding: 75px 50px; 
-        border-radius: 24px;
-        box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.7); 
-        margin-bottom: 40px; 
-        border: 1px solid rgba(255, 255, 255, 0.2);
-    }
-    .hero-title { color: #4ade80; font-size: 3.5rem; font-weight: 800; margin-bottom: 15px; text-shadow: 0 3px 6px rgba(0,0,0,0.6); }
-    .hero-subtitle { color: #f1f5f9; font-size: 1.35rem; font-weight: 500; text-shadow: 0 2px 4px rgba(0,0,0,0.6); }
-    [data-testid="stSidebar"] { background-color: #1e293b !important; border-right: 1px solid rgba(255, 255, 255, 0.1); }
-    .sidebar-header-card {
-        background: linear-gradient(135deg, #16a34a 0%, #0d9488 100%); padding: 16px; border-radius: 12px;
-        text-align: center; color: white; font-weight: 700; font-size: 1.1rem; margin-bottom: 20px;
-    }
-    [data-testid="stMetricValue"] { color: #4ade80 !important; font-weight: 700; }
-    div[data-testid="metric-container"] {
-        background-color: #1e293b; border: 1px solid rgba(255, 255, 255, 0.08); padding: 18px; border-radius: 12px;
-    }
-    .stButton>button {
-        background: linear-gradient(135deg, #16a34a 0%, #15803d 100%); color: white; border: none;
-        border-radius: 10px; font-weight: 600; padding: 10px 24px; transition: all 0.3s ease; width: 100%;
-    }
-    .stButton>button:hover { transform: translateY(-2px); }
-    .stTabs [data-baseweb="tab"] { background-color: #1e293b; border-radius: 8px; color: #94a3b8; padding: 10px 20px; }
-    .stTabs [aria-selected="true"] { background-color: #16a34a !important; color: white !important; }
-    </style>
+<style>
+.stApp { background-color: #0f172a; color: #f8fafc; } 
+.hero { 
+    background: linear-gradient(rgba(15,23,42,0.5), rgba(15,23,42,0.75)), url('https://images.unsplash.com/photo-1500937386664-56d1dfef3854?auto=format&fit=crop&w=1600&q=80'); 
+    background-size: cover; background-position: center;
+    padding: 70px 40px; border-radius: 18px; margin-bottom: 25px; 
+    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4); border: 1px solid rgba(74, 222, 128, 0.2);
+}
+</style>
 """, unsafe_allow_html=True)
 
-# Session State Storage
-if 'logged_user' not in st.session_state:
-    st.session_state.logged_user = None
-if 'auth_mode' not in st.session_state:
-    st.session_state.auth_mode = "Login"
+if 'logged_user' not in st.session_state: st.session_state.logged_user = None
+if 'auth_mode' not in st.session_state: st.session_state.auth_mode = "Login"
 
-# Extra Large Hero Banner Section
-st.markdown("""
-    <div class="hero-container">
-        <div class="hero-title">🌾 ASWANNA (අස්වැන්න)</div>
-        <div class="hero-subtitle">🔒 පෞද්ගලිකත්වය සුරක්ෂිත කළ, ප්‍රවාහන පහසුකම් සහිත B2B AgTech වෙළඳ පද්ධතිය (7.5% Fair Commission)</div>
-    </div>
-""", unsafe_allow_html=True)
+st.markdown('<div class="hero"><h1 style="color: #4ade80; font-size: 2.8rem; font-weight: 800; text-shadow: 2px 2px 4px rgba(0,0,0,0.5);">🌾 ASWANNA (අස්වැන්න)</h1><p style="color: #cbd5e1; font-size: 1.1rem; margin-top: 5px;">ශ්‍රී ලංකාවේ විශ්වාසනීය B2B AgTech හා ප්‍රවාහන Super App</p></div>', unsafe_allow_html=True)
+st.sidebar.markdown('### 🔐 ASWANNA PORTAL')
 
-# Sidebar Authentication
-st.sidebar.markdown("""
-    <div class="sidebar-header-card">
-        🔐 ASWANNA PORTAL<br/>
-        <span style="font-size: 0.85rem; font-weight: normal; opacity: 0.9;">Login or Create Account Below</span>
-    </div>
-""", unsafe_allow_html=True)
-
-if st.session_state.logged_user is None:
-    col_btn1, col_btn2 = st.sidebar.columns(2)
-    with col_btn1:
-        if st.button("🔑 Login"):
-            st.session_state.auth_mode = "Login"
-            st.rerun()
-    with col_btn2:
-        if st.button("📝 Register"):
-            st.session_state.auth_mode = "Register"
-            st.rerun()
-
-    st.sidebar.markdown("---")
-
+if not st.session_state.logged_user:
+    c1, c2 = st.sidebar.columns(2)
+    if c1.button("🔑 Login"): st.session_state.auth_mode = "Login"; st.rerun()
+    if c2.button("📝 Register"): st.session_state.auth_mode = "Register"; st.rerun()
+    
     if st.session_state.auth_mode == "Register":
-        st.sidebar.markdown("### 📝 අලුත් ගිණුමක් තනන්න")
-        reg_role = st.sidebar.selectbox("ඔබ කවුරුන්ද?", ["ගොවියා (Farmer)", "මිලදී ගන්නා (Buyer)"])
-        reg_name = st.sidebar.text_input("සම්පූර්ණ නම / ආයතනය:")
-        reg_phone = st.sidebar.text_input("දුරකථන අංකය (Admin ට පමණි):")
-        reg_address = st.sidebar.text_input("ලිපිනය / Pick-up Location:")
+        r_role = st.sidebar.selectbox("භූමිකාව:", ["විකුණුම්කරු (Seller)", "ගැණුම්කරු (Buyer)", "රියදුරු (Driver)"])
+        r_name, r_phone, r_addr = st.sidebar.text_input("නම:"), st.sidebar.text_input("දුරකථනය:"), st.sidebar.text_input("ලිපිනය:")
         
-        # Enhanced Bank Details Inputs for Farmers
-        reg_bank = ""
-        if reg_role == "ගොවියා (Farmer)":
-            st.sidebar.markdown("🏦 **බැංකු ගිණුම් විස්තර (Payout සඳහා):**")
-            bank_name = st.sidebar.text_input("බැංකුවේ නම (උදා: BOC, Peoples):")
-            bank_branch = st.sidebar.text_input("ශාඛාව (Branch):")
-            acc_number = st.sidebar.text_input("ගිණුම් අංකය:")
-            acc_holder = st.sidebar.text_input("ගිණුම් හිමියාගේ නම:")
-            if bank_name and acc_number:
-                reg_bank = f"Bank: {bank_name} | Branch: {bank_branch} | Acc: {acc_number} | Holder: {acc_holder}"
+        r_pic = st.sidebar.file_uploader("Profile Pic (Max 1MB):", type=["jpg", "png", "jpeg"])
         
-        reg_user = st.sidebar.text_input("Username:")
-        reg_pass = st.sidebar.text_input("Password:", type="password")
-        
-        if st.sidebar.button("✅ Create Account"):
-            if reg_user and reg_pass and reg_name:
+        r_bank = ""
+        r_lic, r_veh1, r_veh2 = None, None, None
+        if "විකුණුම්කරු" in r_role or "රියදුරු" in r_role:
+            bn, bbr, acc, ah = st.sidebar.text_input("බැංකුව:"), st.sidebar.text_input("ශාඛාව:"), st.sidebar.text_input("ගිණුම:"), st.sidebar.text_input("හිමියා:")
+            if bn and acc: r_bank = f"Bank: {bn} | Branch: {bbr} | Acc: {acc} | Holder: {ah}"
+            
+        if "රියදුරු" in r_role:
+            st.sidebar.markdown("🚚 **රියදුරු අතිරේක ලේඛන:**")
+            r_lic = st.sidebar.file_uploader("Driving License:", type=["jpg", "png", "jpeg"])
+            r_veh1 = st.sidebar.file_uploader("Vehicle Photo 1:", type=["jpg", "png", "jpeg"])
+            r_veh2 = st.sidebar.file_uploader("Vehicle Photo 2:", type=["jpg", "png", "jpeg"])
+            v_type = st.sidebar.text_input("වාහන වර්ගය:")
+            v_num = st.sidebar.text_input("වාහන අංකය:")
+
+        r_user, r_pass = st.sidebar.text_input("Username:"), st.sidebar.text_input("Password:", type="password")
+        if st.sidebar.button("✅ Register"):
+            if r_user and r_pass and r_name:
                 try:
-                    add_user(reg_user, reg_pass, reg_role, reg_name, reg_phone, reg_address, reg_bank)
-                    st.sidebar.success("✅ Aswanna පද්ධතියට ඔබව සාර්ථකව ඇතුළත් විය! දැන් Login වන්න.")
-                    st.session_state.auth_mode = "Login"
-                    st.rerun()
-                except Exception as e:
-                    st.sidebar.error(f"⚠️ මෙම Username එක දැනටමත් භාවිතයේ ඇත හෝ දෝෂයකි: {e}")
-            else:
-                st.sidebar.error("⚠️ අත්‍යවශ්‍ය විස්තර නිවැරදිව පුරවන්න.")
-
-    elif st.session_state.auth_mode == "Login":
-        st.sidebar.markdown("### 🔑 ඇතුළු වන්න (Sign In)")
-        login_user = st.sidebar.text_input("Username:")
-        login_pass = st.sidebar.text_input("Password:", type="password")
-        
-        if st.sidebar.button("🚀 Login Now"):
-            user = check_user(login_user, login_pass)
-            if user:
-                st.session_state.logged_user = login_user
-                st.sidebar.success(f"සාදරයෙන් පිළිගනිමු, {user[3]}!")
-                st.rerun()
-            else:
-                st.sidebar.error("⚠️ Username හෝ Password වැරදියි.")
-
+                    img_url = upload_img(r_pic, f"{r_user}_profile") if r_pic else ""
+                    if "රියදුරු" in r_role:
+                        lic_url = upload_img(r_lic, f"{r_user}_lic") if r_lic else ""
+                        v1_url = upload_img(r_veh1, f"{r_user}_veh1") if r_veh1 else ""
+                        v2_url = upload_img(r_veh2, f"{r_user}_veh2") if r_veh2 else ""
+                        supabase.table("drivers").insert({
+                            "username": r_user, "password": hash_p(r_pass), "role": r_role, "name": r_name, 
+                            "phone": r_phone, "address": r_addr, "bank": r_bank, "profile_image_url": img_url,
+                            "license_image_url": lic_url, "vehicle_image_url_1": v1_url, "vehicle_image_url_2": v2_url,
+                            "vehicle_type": v_type if 'v_type' in locals() else "", "vehicle_number": v_num if 'v_num' in locals() else ""
+                        }).execute()
+                    else:
+                        tbl = "farmers" if "විකුණුම්කරු" in r_role else "buyers"
+                        supabase.table(tbl).insert({
+                            "username": r_user, "password": hash_p(r_pass), "role": r_role, "name": r_name, 
+                            "phone": r_phone, "address": r_addr, "bank": r_bank, "profile_image_url": img_url
+                        }).execute()
+                    st.sidebar.success("සාර්ථකයි! Login වන්න."); st.session_state.auth_mode = "Login"; st.rerun()
+                except Exception as e: st.sidebar.error(f"දෝෂයකි: {e}")
+            else: st.sidebar.error("විස්තර පුරවන්න.")
+    else:
+        l_user, l_pass = st.sidebar.text_input("Username:"), st.sidebar.text_input("Password:", type="password")
+        if st.sidebar.button("🚀 Login"):
+            logged_success = False
+            for tbl in ["farmers", "buyers", "drivers", "admins"]:
+                try:
+                    res = supabase.table(tbl).select("*").eq("username", l_user).eq("password", hash_p(l_pass)).execute()
+                    if res.data: 
+                        st.session_state.logged_user = l_user
+                        logged_success = True
+                        st.rerun()
+                except:
+                    continue
+            if not logged_success: st.sidebar.error("වැරදියි.")
 else:
     u_data = get_user_details(st.session_state.logged_user)
-    if u_data:
-        st.sidebar.markdown(f"""
-            <div style="background: rgba(255,255,255,0.05); padding: 15px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1); margin-bottom: 15px;">
-                <p style="margin:0; font-size: 0.9rem; color: #94a3b8;">Logged in as:</p>
-                <h4 style="margin:0; color: #4ade80;">👤 {u_data[2]}</h4>
-                <p style="margin:0; font-size: 0.85rem; color: #cbd5e1;">🎭 Role: {u_data[1]}</p>
-            </div>
-        """, unsafe_allow_html=True)
-    
-    if st.sidebar.button("🚪 Logout"):
-        st.session_state.logged_user = None
-        st.rerun()
+    if u_data: st.sidebar.markdown(f"👤 **{u_data[2]}** ({u_data[1]})")
+    if st.sidebar.button("🚪 Logout"): st.session_state.logged_user = None; st.rerun()
 
-# Tabs
-tab1, tab2, tab3 = st.tabs(["👨‍🌾 ගොවිපොළ (Farmer Portal)", "🏨 මිලදී ගන්නන් (Buyer Portal)", "🛡️ Admin & Transport Hub"])
+# --- නිල උපදෙස් පත්‍රිකාව ---
+with st.expander("📖 ඔබගේ සාර්ථක ගනුදෙනුව උදෙසා - නිල උපදෙස් පත්‍රිකාව", expanded=False):
+    st.markdown("""
+    * **විකුණුම්කරු (ගොවියා) පංගුව:** 70% ක් ගොවියාගේ බැංකු ගිණුමට (ගනුදෙනුව Complete වූ පසු).
+    * **ඇප් කොමිස් (Platform):** 10% ක් වේදිකාවට.
+    * **ප්‍රවාහන ගාස්තුව (Transport/Driver):** දුර සහ බර මත පදනම්ව රියදුරුට හිමිවේ.
+    * **සියලුම දිස්ත්‍රික්ක 25 ආවරණය වේ.**
+    """)
 
-# ==========================================
-# 1. FARMER PORTAL
-# ==========================================
-with tab1:
-    st.header("👨‍🌾 අස්වැන්න ගොවි පාලන පුවරුව")
-    
+user_role = ""
+if st.session_state.logged_user:
+    u_info = get_user_details(st.session_state.logged_user)
+    if u_info: user_role = u_info[1]
+
+if not st.session_state.logged_user:
+    t_buyer, t_profile = st.tabs(["🏨 ගැණුම්කරු (ප්‍රදර්ශනය)", "👤 Profile"])
+    t_farmer, t_driver, t_admin = None, None, None
+elif "විකුණුම්කරු" in user_role:
+    t_farmer, t_profile = st.tabs(["👨‍🌾 විකුණුම්කරු පාලන පුවරුව", "👤 Profile"])
+    t_buyer, t_driver, t_admin = None, None, None
+elif "ගැණුම්කරු" in user_role:
+    t_buyer, t_profile = st.tabs(["🏨 ගැණුම්කරු පාලන පුවරුව", "👤 Profile"])
+    t_farmer, t_driver, t_admin = None, None, None
+elif "රියදුරු" in user_role:
+    t_driver, t_profile = st.tabs(["🚚 ප්‍රවාහන පාලන පුවරුව", "👤 Profile"])
+    t_farmer, t_buyer, t_admin = None, None, None
+elif "Admin" in user_role:
+    t_admin, t_profile = st.tabs(["🛠️ Admin පාලන පුවරුව", "👤 Profile"])
+    t_farmer, t_buyer, t_driver = None, None, None
+else:
+    t_buyer, t_profile = st.tabs(["🏨 ගැණුම්කරු", "👤 Profile"])
+    t_farmer, t_driver, t_admin = None, None, None
+
+# --- 1. විකුණුම්කරු පුවරුව ---
+if t_farmer is not None:
+    with t_farmer:
+        st.header("👨‍🌾 විකුණුම්කරු පාලන පුවරුව")
+        with st.form("c_form", clear_on_submit=True):
+            cn, qty, ppd, dist = st.text_input("එළවළු/පළතුරු නම:"), st.number_input("ප්‍රමාණය (Kg):", 1.0), st.number_input("මිල (රු/Kg):", 1.0), st.selectbox("දිස්ත්‍රික්කය:", [
+                "කොළඹ", "ගම්පහ", "කළුතර", "මහනුවර", "මාතලේ", "නුවරඑළිය", "ගාල්ල", "මාතර", "හම්බන්තොට", 
+                "යාපනය", "කිලිනොච්චිය", "මන්නාරම", "වවුනියාව", "මුලතිව්", "මඩකලපුව", "අම්පාර", "ත්‍රිකුණාමලය", 
+                "කුරුණෑගල", "පුත්තලම", "අනුරාධපුරය", "පොළොන්නරුව", "බදුල්ල", "මොණරාගල", "රත්නපුර", "කෑගල්ල"
+            ])
+            img1, img2, img3 = st.file_uploader("1. Close-up", type=["jpg","png","jpeg"]), st.file_uploader("2. Full View", type=["jpg","png","jpeg"]), st.file_uploader("3. Quality", type=["jpg","png","jpeg"])
+            if st.form_submit_button("පළ කරන්න"):
+                if cn and img1 and img2 and img3:
+                    df_c = get_data("products")
+                    cid = f"ASW-{len(df_c)+101}"
+                    u1, u2, u3 = upload_img(img1, f"crops/{cid}_1"), upload_img(img2, f"crops/{cid}_2"), upload_img(img3, f"crops/{cid}_3")
+                    supabase.table("products").insert({"crop_id": cid, "farmer_username": st.session_state.logged_user, "crop_name": cn, "qty": qty, "price_per_kg": ppd, "district": dist, "img_close": u1, "img_full": u2, "img_quality": u3, "created_at": datetime.datetime.now().isoformat(), "date": str(datetime.date.today())}).execute()
+                    st.success("සාර්ථකයි!"); st.rerun()
+                else: st.error("සියලු විස්තර සහ පින්තූර 3 අනිවාර්ය වේ.")
+        df = get_data("products")
+        if not df.empty: st.dataframe(df[df['farmer_username'] == st.session_state.logged_user], use_container_width=True)
+
+# --- 2. ගැණුම්කරු පුවරුව ---
+if t_buyer is not None:
+    with t_buyer:
+        st.header("🏨 ගැණුම්කරුවන්ගේ පුවරුව (70% ගොවියාට / 10% ඇප් එකට / 20% ප්‍රවාහනය)")
+        df_o = get_data("orders")
+        active = df_o[(df_o['buyer_username'] == st.session_state.logged_user) & (df_o['status'] == 'Pending')] if st.session_state.logged_user and not df_o.empty else pd.DataFrame()
+
+        if not active.empty:
+            st.info("⚠️ ක්‍රියාත්මක ඇණවුමක් ඇත.")
+            for _, row in active.iterrows():
+                st.markdown(f"**ඇණවුම:** {row['order_id']} | **භාණ්ඩය:** {row['crop_name']} ({row['qty']} Kg)")
+                f_det = get_user_details(row['farmer_username'])
+                st.success(f"📞 විකුණුම්කරු: {f_det[2] if f_det else ''} | දුරකථනය: **{f_det[3] if f_det else ''}**")
+                if st.button(f"✅ ගනුදෙනුව සම්පූර්ණයි (Complete) - {row['order_id']}", key=f"comp_{row['order_id']}"):
+                    supabase.table("orders").update({"status": "Completed"}).eq("order_id", row['order_id']).execute()
+                    if row.get('crop_id'): supabase.table("products").delete().eq("crop_id", row['crop_id']).execute()
+                    st.success("ගනුදෙනුව සාර්ථකව අවසන් විය!"); st.rerun()
+        else:
+            df = get_data("products")
+            valid = [r for _, r in df.iterrows()] if not df.empty else []
+            act = pd.DataFrame(valid) if valid else pd.DataFrame()
+            if not act.empty:
+                for _, r in act.iterrows():
+                    with st.expander(f"📦 {r['crop_name']} - {r['qty']} Kg | රු.{r['price_per_kg']}/Kg | දිස්ත්‍රික්කය: {r['district']}"):
+                        ic1, ic2, ic3 = st.columns(3)
+                        if r.get('img_close'): ic1.image(r['img_close'], use_container_width=True)
+                        if r.get('img_full'): ic2.image(r['img_full'], use_container_width=True)
+                        if r.get('img_quality'): ic3.image(r['img_quality'], use_container_width=True)
+
+                if st.session_state.logged_user and "ගැණුම්කරු" in user_role:
+                    s_id = st.selectbox("Crop ID තෝරන්න:", act['crop_id'].tolist())
+                    row = act[act['crop_id'] == s_id].iloc[0]
+                    o_qty = st.number_input("ප්‍රමාණය (Kg):", 1.0, float(row['qty']))
+                    
+                    item_sub = o_qty * float(row['price_per_kg'])
+                    farmer_payout = item_sub * 0.70  # 70%
+                    app_comm = item_sub * 0.10       # 10%
+                    transport_fee = 1500.0           # Distance-based transport fee estimate
+                    total_pay = item_sub + transport_fee
+                    
+                    st.markdown(f"💳 **ගෙවිය යුතු මුළු මුදල:** රු. {total_pay:,.2f} *(භාණ්ඩය: {item_sub:,.2f} [ගොවියා: {farmer_payout:,.2f} | ඇප්: {app_comm:,.2f}] + ප්‍රවාහන ගාස්තුව: {transport_fee:,.2f})*")
+                    if st.button("💳 මුදල් ගෙවා ඇණවුම් කරන්න"):
+                        supabase.table("products").update({"qty": float(row['qty']) - o_qty}).eq("crop_id", s_id).execute()
+                        supabase.table("orders").insert({
+                            "order_id": f"ORD-{len(df_o)+5001}", "crop_id": s_id, "buyer_username": st.session_state.logged_user, 
+                            "farmer_username": row['farmer_username'], "crop_name": row['crop_name'], "qty": o_qty, 
+                            "total_paid": total_pay, "farmer_amount": farmer_payout, "app_commission": app_comm, 
+                            "transport_fee": transport_fee, "status": "Pending", "date": str(datetime.date.today())
+                        }).execute()
+                        st.success("ඇණවුම සාර්ථකයි!"); st.rerun()
+
+# --- 3. රියදුරු පුවරුව ---
+if t_driver is not None:
+    with t_driver:
+        st.header("🚚 රියදුරු ප්‍රවාහන පාලන පුවරුව (Live Tracking & Deliveries)")
+        st.success("ඔබගේ ප්‍රවාහන ඇණවුම් සහ ගමන්මඟ පහතින් පාලනය කරන්න.")
+        try:
+            import folium
+            from streamlit_folium import st_folium
+            m = folium.Map(location=[7.8731, 80.7718], zoom_start=7)
+            folium.Marker([7.8731, 80.7718], popup="Driver Location", icon=folium.Icon(color="green", icon="truck")).add_to(m)
+            st_folium(m, width=700, height=350)
+        except:
+            st.info("🗺️ සිතියම් පහසුකම සක්‍රීයයි.")
+
+# --- 4. Admin පුවරුව ---
+if t_admin is not None:
+    with t_admin:
+        st.header("🛠️ Admin පාලන පුවරුව")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.subheader("📋 Orders")
+            df_ord = get_data("orders")
+            if not df_ord.empty: st.dataframe(df_ord, use_container_width=True)
+        with col2:
+            st.subheader("🚚 Drivers")
+            df_drv = get_data("drivers")
+            if not df_drv.empty: st.dataframe(df_drv, use_container_width=True)
+
+# --- 5. Profile ටැබ් එක ---
+with t_profile:
+    st.header("👤 පරිශීලක පැතිකඩ")
     if st.session_state.logged_user:
-        u_data = get_user_details(st.session_state.logged_user)
-        if u_data and u_data[1] == "ගොවියා (Farmer)":
-            st.success(f"ඔබ Log in වී ඇත: **{u_data[2]}** (🔒 පෞද්ගලික විස්තර ආරක්ෂිතයි)")
-            
-            st.subheader("➕ අලුත් අස්වැන්නක් එකතු කරන්න")
-            with st.form("add_crop_form", clear_on_submit=True):
-                col_f1, col_f2 = st.columns(2)
-                with col_f1:
-                    crop_name = st.text_input("එළවළු/පළතුරු වර්ගය:")
-                    qty = st.number_input("ප්‍රමාණය (Kg):", min_value=1.0, step=5.0)
-                with col_f2:
-                    price_per_kg = st.number_input("1Kg සඳහා ඔබේ මිල (රු.):", min_value=1.0, step=5.0)
-                    district = st.selectbox("දිස්ත්‍රික්කය:", ["නුවරඑළිය", "බදුල්ල", "මාතලේ", "අනුරාධපුරය", "කෑගල්ල", "වෙනත්"])
-                
-                if st.form_submit_button("අස්වැන්න පළ කරන්න"):
-                    if crop_name:
-                        df_crops = get_all_crops()
-                        crop_id = f"ASW-{len(df_crops) + 101}"
-                        add_crop(crop_id, st.session_state.logged_user, crop_name, qty, price_per_kg, district, str(datetime.date.today()))
-                        st.success(f"✅ අස්වැන්න සාර්ථකව ඇතුළත් විය! Crop ID: {crop_id}")
-                    else:
-                        st.error("⚠️ එළවළු/පළතුරු වර්ගය ඇතුළත් කරන්න.")
-
-            st.divider()
-            st.subheader("📋 ඔබේ පවතින අස්වැන්න Listings")
-            df_crops = get_all_crops()
-            if not df_crops.empty:
-                my_crops = df_crops[df_crops['farmer_username'] == st.session_state.logged_user]
-                if not my_crops.empty:
-                    st.dataframe(my_crops[['crop_id', 'crop_name', 'qty', 'price_per_kg', 'district']], use_container_width=True)
-                else:
-                    st.info("ඔබ තවමත් අස්වැන්නක් ඇතුළත් කර නැත.")
-            else:
-                st.info("තවමත් පද්ධතියේ අස්වැන්න ඇතුළත් කර නැත.")
-        else:
-            st.warning("⚠️ ඔබ Farmer Account එකකින් Log in වී නැත.")
-    else:
-        st.warning("⚠️ කරුණාකර වම් පසින් ඇති Sidebar එක හරහා Login වන්න හෝ Register වන්න.")
-
-# ==========================================
-# 2. BUYER PORTAL
-# ==========================================
-with tab2:
-    st.header("🏨 මිලදී ගන්නන්ගේ පුවරුව")
-    
-    df_crops = get_all_crops()
-    active_crops = df_crops[df_crops['qty'] > 0] if not df_crops.empty else pd.DataFrame()
-
-    if not active_crops.empty:
-        st.subheader("🛒 Aswanna Marketplace")
-        st.caption("🔒 ගොවීන්ගේ පෞද්ගලික විස්තර සහ දුරකථන අංක ආරක්ෂිතව සඟවා ඇත.")
-        st.dataframe(active_crops[['crop_id', 'crop_name', 'qty', 'price_per_kg', 'district']], use_container_width=True)
-        
-        st.divider()
-        st.subheader("💳 ඇණවුම් කිරීම")
-        
-        if st.session_state.logged_user:
-            u_data = get_user_details(st.session_state.logged_user)
-            if u_data and u_data[1] == "මිලදී ගන්නා (Buyer)":
-                selected_id = st.selectbox("අවශ්‍ය Crop ID එක තෝරන්න:", active_crops['crop_id'].tolist())
-                selected_row = active_crops[active_crops['crop_id'] == selected_id].iloc[0]
-                
-                order_qty = st.number_input(f"අවශ්‍ය ප්‍රමාණය (Kg) [උපරිම {selected_row['qty']}]:", min_value=1.0, max_value=float(selected_row['qty']))
-                
-                sub_total = order_qty * float(selected_row['price_per_kg'])
-                commission = sub_total * 0.075
-                farmer_amount = sub_total - commission
-                
-                st.write(f"**මුළු එකතුව:** රු. {sub_total:,.2f}")
-                st.caption("🚚 ප්‍රවාහන කටයුතු Platform එක හරහා ස්වයංක්‍රීයව සංවිධානය වේ.")
-                
-                if st.button("Confirm Order & Pay"):
-                    new_qty = float(selected_row['qty']) - order_qty
-                    update_crop_qty(selected_id, new_qty)
-                    
-                    df_orders = get_all_orders()
-                    order_id = f"ORD-{len(df_orders) + 5001}"
-                    
-                    add_order(order_id, st.session_state.logged_user, selected_row['farmer_username'], 
-                            selected_row['crop_name'], order_qty, sub_total, commission, farmer_amount, 
-                            "Transport Pending 🚚", str(datetime.date.today()))
-                    
-                    st.success(f"🎉 ඇණවුම සාර්ථකව Save විය! Order ID: {order_id}")
-                    st.balloons()
-            else:
-                st.warning("⚠️ ඇණවුම් කිරීමට කරුණාකර Buyer Account එකකින් Log in වන්න.")
-        else:
-            st.warning("⚠️ ඇණවුම් කිරීමට කරුණාකර වම් පස Sidebar එකෙන් Log in වන්න.")
-    else:
-        st.info("දැනට වෙළඳපොළේ අස්වැන්න නොමැත.")
-
-# ==========================================
-# 3. ADMIN & LOGISTICS HUB
-# ==========================================
-with tab3:
-    st.header("🛡️ Aswanna Admin & Transport Hub")
-    st.write("7.5% කොමිස් ආදායම, ගනුදෙනු සහ ප්‍රවාහන කටයුතු මෙහෙයවීම.")
-    
-    df_orders = get_all_orders()
-    if not df_orders.empty:
-        m1, m2, m3 = st.columns(3)
-        m1.metric("මුළු ගනුදෙනු වටිනාකම", f"රු. {df_orders['total_paid'].sum():,.2f}")
-        m2.metric("ඔබේ 7.5% කොමිස් ලාභය", f"රු. {df_orders['your_commission'].sum():,.2f}")
-        m3.metric("ගොවීන්ට යැවිය යුතු මුදල", f"රු. {df_orders['payout_to_farmer'].sum():,.2f}")
-        
-        st.divider()
-        st.subheader("🚚 Transport Dispatch & Privacy Panel (Admin Only)")
-        st.write("ප්‍රවාහනය සඳහා ඔබට පමණක් පෙනෙන ගොවියාගේ සහ මිලදී ගන්නාගේ පෞද්ගලික විස්තර:")
-        
-        full_dispatch_data = []
-        for idx, row in df_orders.iterrows():
-            f_user = get_user_details(row['farmer_username'])
-            b_user = get_user_details(row['buyer_username'])
-            
-            full_dispatch_data.append({
-                "Order ID": row['order_id'],
-                "Crop": row['crop_name'],
-                "Qty (Kg)": row['qty'],
-                "Pick-up Address (Farmer)": f_user[4] if f_user else 'N/A',
-                "Farmer Phone": f_user[3] if f_user else 'N/A',
-                "Farmer Bank": f_user[5] if f_user else 'N/A',
-                "Delivery Address (Delivery)": b_user[4] if b_user else 'N/A',
-                "Buyer Phone": b_user[3] if b_user else 'N/A',
-                "Status": row['status']
-            })
-            
-        st.dataframe(pd.DataFrame(full_dispatch_data), use_container_width=True)
-    else:
-        st.info("තවමත් ගනුදෙනු සිදුවී නැත.")
+        u = get_user_details(st.session_state.logged_user)
+        if u:
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                if len(u) > 6 and u[6]: c1.image(u[6], width=180)
+            with c2:
+                st.markdown(f"### නම: {u[2]}")
+                st.markdown(f"**Username:** {u[0]} | **Role:** {u[1]}")
+                st.markdown(f"**Phone:** {u[3] or 'N/A'} | **Address:** {u[4] or 'N/A'}")
+                if u[5]: st.markdown(f"**Bank:** {u[5]}")
